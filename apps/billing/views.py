@@ -1,5 +1,6 @@
 from datetime import timedelta, datetime
 from decimal import Decimal
+
 from rest_framework.decorators import api_view
 from rest_framework import status
 from rest_framework.response import Response
@@ -75,5 +76,15 @@ def charge(request):
 
 
 @api_view(['POST'])
-def add_payment_method(request):
-    pass
+def add_card(request):
+    stripe_token = request.data['stripe_token']
+    customer, _ = Customer.get_or_create(subscriber=request.user)
+    try:
+        customer.add_card(stripe_token)
+    except Exception:
+        return Response({"message": "There was an error during adding a card"},
+                        status=status.HTTP_400_BAD_REQUEST)
+    else:
+        return Response({"message": "Card was successfully added"}, status=status.HTTP_200_OK)
+
+

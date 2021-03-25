@@ -5,7 +5,7 @@ from rest_framework.decorators import api_view
 from rest_framework import status
 from rest_framework.response import Response
 from djstripe.models import Customer, Price, Subscription, PaymentMethod
-from djstripe.enums import SubscriptionStatus
+from djstripe.enums import SubscriptionStatus, InvoiceCollectionMethod
 
 from apps.core.exceptions import NotEnoughTranscriptionsError
 
@@ -13,14 +13,20 @@ from apps.core.exceptions import NotEnoughTranscriptionsError
 @api_view(['POST'])
 def subscribe(request):
     customer, _ = Customer.get_or_create(subscriber=request.user)
+    if Subscription.objects.filter(customer=customer).exclude(status=SubscriptionStatus.canceled).exists():
+        return Response({"message": "User already has uncanceled subscription"}, status=status.HTTP_400_BAD_REQUEST)
     try:
         price = Price.objects.get(nickname=request.data['price'])
     except Price.DoesNotExist:
         return Response({"message": "Price doesnot exist"}, status=status.HTTP_404_NOT_FOUND)
     if PaymentMethod.objects.filter(customer=customer).exists():
         try:
-            kwargs = {'trial_end': datetime.now() + timedelta(7), 'collection_method': 'send_invoice',
-                      'days_until_due': 7}
+            if Subscription.objects.filter(customer=customer, status=SubscriptionStatus.canceled,
+                                           collection_method=InvoiceCollectionMethod.send_invoice).exists():
+                kwargs = {'collection_method': 'charge_automatically'}
+            else:
+                kwargs = {'trial_end': datetime.now() + timedelta(7), 'collection_method': 'send_invoice',
+                          'days_until_due': 7}
             customer.subscribe(price=price, **kwargs)
         except Exception:
             return Response({"message": "There was an error during subscribing"},
@@ -60,7 +66,7 @@ def unsubscribe(request):
 
 
 @api_view(['POST'])
-def charge(request):
+def charge_transcription(request):
     customer, _ = Customer.get_or_create(subscriber=request.user)
     if PaymentMethod.objects.filter(customer=customer).exists():
         try:
@@ -69,6 +75,8 @@ def charge(request):
             return Response({"message": "There was an error during charging a fee"},
                             status=status.HTTP_400_BAD_REQUEST)
         else:
+            request.user.increment_transcriptions_count(1)
+            request.user.save()
             return Response({"message": "Successfully charged"}, status=status.HTTP_200_OK)
     else:
         return Response({"message": "Customer must add payment methods"},
